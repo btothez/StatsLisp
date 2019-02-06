@@ -46,6 +46,22 @@ class Lambda(InterpreterObject):
     def __repr__(self):
         return "(lambda (%s) (%s)" % (self.arguments, self.code)
 
+class Variable(InterpreterObject):
+    def __init__(self, series):
+        self.denominator = series.count()
+        self.numerator = series.apply(lambda x: x).count()
+        self.proportion = self.numerator / self.denominator
+        self.mean = series.count() * series.mean()
+        self.good = True
+
+    def __repr__(self):
+        return "Variable: {}".format(self.__dict__.__str__())
+
+
+def add_series(name, series, env):
+    env[name] = Variable(series)
+    return env
+
 def tokenize(s):
     ret = []
     in_string = False
@@ -173,7 +189,7 @@ def do_parse(tokens):
 
 def eval(expr, environment):
     print('IN EVAL: GOT EXPR {}'.format(expr))
-    print('OF TYPE: {}'.format(type(expr)))
+    # print('OF TYPE: {}'.format(type(expr)))
     if isinstance(expr, int):
         return expr
     elif isinstance(expr, str):
@@ -189,6 +205,7 @@ def eval(expr, environment):
             print(environment)
             print(Symbol)
             fail("Couldn't find symbol {}".format(expr.value))
+        print('  Got a symbol {}'.format(environment[expr.value]))
         return environment[expr.value]
     elif isinstance(expr, list):
 
@@ -199,8 +216,11 @@ def eval(expr, environment):
             would print both 3 = 2 and 3 = 3, because the eval function evaluates its arguments in order.
         '''
 
-        print('IT IS A LIST!!!!')
-        print('LENGTH: {}'.format(len(expr)))
+        # print('IT IS A LIST!!!!')
+        print('LIST LENGTH: {}'.format(len(expr)))
+        if len(expr) == 0:
+            print('Returning NONE')
+            return None
 
         # At least 3 elements
         # Odd number of elements
@@ -216,31 +236,29 @@ def eval(expr, environment):
             # Finally, do the comparator operators, I guess, left to right
             operators = [x.__str__() for x in expr[1::2]]
             for oper_list in operator_hierarchy:
-                print('oper_list {}'.format(oper_list))
+                # print('oper_list {}'.format(oper_list))
                 for ind in range(len(operators)):
                     if operators[ind] in oper_list:
                         expr_strs = [x.__str__() for x in expr]
-                        print('Found {} first'.format(operators[ind]))
+                        # print('Found {} first'.format(operators[ind]))
                         # Do this one
                         oper_index = find_first_index(operators[ind], expr_strs)
-                        print('.    oper_index {}'.format(oper_index))
-                        print('.    expr[oper_index] {}'.format(expr[oper_index]))
+                        # print('.    oper_index {}'.format(oper_index))
+                        # print('.    expr[oper_index] {}'.format(expr[oper_index]))
                         actual_operator = eval(expr[oper_index], environment)
-                        print('.    actual_operator {}'.format(actual_operator))
-                        first_arg = eval(expr[oper_index - 1], environment) if type(expr[oper_index - 1]) == list else expr[oper_index - 1]
-                        second_arg = eval(expr[oper_index + 1], environment) if type(expr[oper_index + 1]) == list else expr[oper_index + 1]
-                        print('Running {} on {} and {}'.format(expr[oper_index], first_arg, second_arg))
+                        # print('.    actual_operator {}'.format(actual_operator))
+                        first_arg = eval(expr[oper_index - 1], environment) if type(expr[oper_index - 1]) in [list, Symbol] else expr[oper_index - 1]
+                        second_arg = eval(expr[oper_index + 1], environment) if type(expr[oper_index + 1]) in [list, Symbol] else expr[oper_index + 1]
+                        print('    Running {} on {} and {}'.format(expr[oper_index], first_arg, second_arg))
 
                         new_field = apply(
                             actual_operator,
                             [first_arg, second_arg],
                             environment)
-                        print('Got back {}'.format(new_field))
+                        # print('Got back {}'.format(new_field))
                         expr[(oper_index - 1): (oper_index + 2 )] = [new_field]
-                        print('Now Expression is', expr)
+                        print('         Now Expression is', expr)
 
-            print('done with this part expr is now:')
-            print(expr)
             return eval(expr[0], environment)
 
         ''' Lambda is simply an object that holds arguments (a list of arguments with their names)
@@ -268,14 +286,19 @@ def eval(expr, environment):
                 name = expr[1].value
                 value = eval(expr[2], environment)
                 environment[name] = value
+                # Run inside of following list
+                print('Defined! Now running the rest of list {}'.format(expr[3:][0]))
+                return eval(expr[3:][0], environment)
 
             elif expr[0].value == 'begin':
                 for ex in expr[1:]:
                     eval(ex, environment)
 
             else:
+                print('we are in the list else {}'.format(expr))
                 fn = eval(expr[0], environment)
                 args = [eval(arg, environment) for arg in expr[1:]]
+                print('now applying my list else ==> {} to {}'.format(fn, args))
                 return apply(fn, args, environment)
 
 #Apply is pretty simple too. It checks if a function is an interpreter built-in or not.
@@ -283,10 +306,6 @@ def eval(expr, environment):
 
 def apply(fn, args, environment):
     # If it is, it simply passes the arguments to the built-in.
-
-    # print('fun')
-    # print(fn)
-    print('IN APPLY: args {}'.format(args))
 
     if callable(fn):
         return fn(*args)
@@ -303,6 +322,8 @@ def apply(fn, args, environment):
         for i in range(len(fn.arguments)):
             new_env[fn.arguments[i].value] = args[i]
 
+        print('IN LAMBDA APPLICATION, CODE :{}'.format(fn.code))
+        print('IN LAMBDA APPLICATION, NEWENV :{}'.format(new_env))
         # And we call eval on the function body. That’s it!
         return eval(fn.code, new_env)
 
@@ -324,8 +345,8 @@ base_environment = {
 }
 
 
-def run(str):
-    return eval(parse(tokenize(str)), base_environment)
+def run(str, env=base_environment):
+    return eval(parse(tokenize(str)), env)
 
 def main():
     if len(sys.argv) != 2:
