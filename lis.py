@@ -3,6 +3,23 @@ import sys
 import operator
 import pprint as pretty_print
 pprint = lambda obj: pretty_print.PrettyPrinter(indent=4).pprint(obj)
+infix_operators = ['*', '+', '/', '-', '==', '>', '<']
+comp_operators = ['==', '>', '<']
+mult_operators = ['*', '/']
+add_operators = ['+', '-']
+
+operator_hierarchy = [
+    ['*', '/'],
+    ['+', '-'],
+    ['==', '>', '<']
+]
+
+def find_first_index(el, lst, ind=0):
+    if len(lst) == 0:
+        return False
+    elif lst[0] == el:
+        return ind
+    return find_first_index(el, lst[1:], ind + 1)
 
 def fail(s):
     print(s)
@@ -138,13 +155,17 @@ def do_parse(tokens):
 
 '''
     INTERPRETER:
-    The interpreter is broken into two functions, eval and apply. Both take an s-expression (expr)
-    and a dictionary of variables in scope (environment) as parameters.
-    eval‘s role is to take an expression and return its value.
+    The interpreter is broken into two functions, eval and apply.
+    Both take an s-expression (expr)
+        and a dictionary of variables in scope (environment) as parameters.
+    Eval‘s role is to take an expression and return its value.
     For example, if you pass a symbol to eval, it will look up its value in the symbol table and return it.
     apply is reserved for evaluating functions. It takes as parameters a function (written in Lisp or Python),
     a list of arguments and calls the function.
-    How does it do that? It simply updates the environment to define the function’s parameters as local variables, and then calls eval!
+    How does it do that?
+        It simply updates the environment
+        to define the function’s parameters as local variables,
+        and then calls eval!
 '''
 
 # First, let’s define how to evaluate numbers, strings and Symbols.
@@ -152,6 +173,7 @@ def do_parse(tokens):
 
 def eval(expr, environment):
     print('IN EVAL: GOT EXPR {}'.format(expr))
+    print('OF TYPE: {}'.format(type(expr)))
     if isinstance(expr, int):
         return expr
     elif isinstance(expr, str):
@@ -177,15 +199,56 @@ def eval(expr, environment):
             would print both 3 = 2 and 3 = 3, because the eval function evaluates its arguments in order.
         '''
 
+        print('IT IS A LIST!!!!')
+        print('LENGTH: {}'.format(len(expr)))
+
+        # At least 3 elements
+        # Odd number of elements
+        # All of the interstitial elements are infixable
+        if all([
+            len(expr) >= 3,
+            len(expr) % 2 == 1,
+            set([x.__str__() for x in expr[1::2]]).issubset(set(infix_operators))
+        ]):
+            print('We got a case of the infixes!')
+            # First, do the mult operators, from left to right
+            # Next, do the add_operators, from left to right
+            # Finally, do the comparator operators, I guess, left to right
+            operators = [x.__str__() for x in expr[1::2]]
+            for oper_list in operator_hierarchy:
+                print('oper_list {}'.format(oper_list))
+                for ind in range(len(operators)):
+                    if operators[ind] in oper_list:
+                        expr_strs = [x.__str__() for x in expr]
+                        print('Found {} first'.format(operators[ind]))
+                        # Do this one
+                        oper_index = find_first_index(operators[ind], expr_strs)
+                        print('.    oper_index {}'.format(oper_index))
+                        print('.    expr[oper_index] {}'.format(expr[oper_index]))
+                        actual_operator = eval(expr[oper_index], environment)
+                        print('.    actual_operator {}'.format(actual_operator))
+                        first_arg = eval(expr[oper_index - 1], environment) if type(expr[oper_index - 1]) == list else expr[oper_index - 1]
+                        second_arg = eval(expr[oper_index + 1], environment) if type(expr[oper_index + 1]) == list else expr[oper_index + 1]
+                        print('Running {} on {} and {}'.format(expr[oper_index], first_arg, second_arg))
+
+                        new_field = apply(
+                            actual_operator,
+                            [first_arg, second_arg],
+                            environment)
+                        print('Got back {}'.format(new_field))
+                        expr[(oper_index - 1): (oper_index + 2 )] = [new_field]
+                        print('Now Expression is', expr)
+
+            print('done with this part expr is now:')
+            print(expr)
+            return eval(expr[0], environment)
+
+        ''' Lambda is simply an object that holds arguments (a list of arguments with their names)
+            and code (a list of Lisp instructions to execute). '''
         if isinstance(expr[0], Symbol):
             if expr[0].value == 'lambda':
                 arg_names = expr[1]
                 code = expr[2]
-
-                '''
-                    Lambda is simply an object that holds arguments (a list of arguments with their names)
-                    and code (a list of Lisp instructions to execute).
-                '''
 
                 return Lambda(arg_names, code)
 
@@ -221,6 +284,9 @@ def eval(expr, environment):
 def apply(fn, args, environment):
     # If it is, it simply passes the arguments to the built-in.
 
+    # print('fun')
+    # print(fn)
+    print('IN APPLY: args {}'.format(args))
 
     if callable(fn):
         return fn(*args)
@@ -257,6 +323,9 @@ base_environment = {
     'print': lambda x: sys.stdout.write(str(x) + '\n'),
 }
 
+
+def run(str):
+    return eval(parse(tokenize(str)), base_environment)
 
 def main():
     if len(sys.argv) != 2:
