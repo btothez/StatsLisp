@@ -315,13 +315,12 @@ def eval(expr, environment, variable=False):
                 name = expr[1].value
                 value = eval(expr[2], environment)
                 environment[name] = value
-                # Run inside of following list
-                print('Defined! Now running the rest of list {}'.format(expr[3:][0]))
-                return eval(expr[3:][0], environment)
 
             elif expr[0].value == 'begin':
-                for ex in expr[1:]:
+                for ex in expr[1:-1]:
                     eval(ex, environment)
+
+                return eval(expr[-1], environment)
 
             else:
                 print('we are in the list else {}'.format(expr))
