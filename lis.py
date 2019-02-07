@@ -51,8 +51,14 @@ class Variable(InterpreterObject):
         self.denominator = series.count()
         self.numerator = series.apply(lambda x: x).count()
         self.proportion = self.numerator / self.denominator
+        self.variance = (self.proportion * (1 - self.proportion)) / self.denominator
         self.mean = series.count() * series.mean()
         self.good = True
+
+    def multiply_constant(self, const):
+        self.mean = self.mean * const
+        self.variance = self.mean * (const**2)
+        return self
 
     def __repr__(self):
         return "Variable: {}".format(self.__dict__.__str__())
@@ -183,11 +189,23 @@ def do_parse(tokens):
         to define the function’s parameters as local variables,
         and then calls eval!
 '''
-
 # First, let’s define how to evaluate numbers, strings and Symbols.
 
+def variable_multiplication(x, y):
+    if isinstance(x, int):
+        return y.multiply_constant(x)
+    elif isinstance(y, int):
+        return x.multiply_constant(y)
 
-def eval(expr, environment):
+
+variable_environment = {
+    '*': variable_multiplication
+}
+
+def variables_in_args(args):
+    return any([isinstance(x, Variable) for x in args])
+
+def eval(expr, environment, variable=False):
     print('IN EVAL: GOT EXPR {}'.format(expr))
     # print('OF TYPE: {}'.format(type(expr)))
     if isinstance(expr, int):
@@ -198,15 +216,22 @@ def eval(expr, environment):
         return expr
     elif isinstance(expr, String):
         return expr.value
+    elif isinstance(expr, Variable):
+        return expr
     elif isinstance(expr, Symbol):
-        if expr.value not in environment:
-            print('OOPS')
-            print(expr.value)
-            print(environment)
-            print(Symbol)
-            fail("Couldn't find symbol {}".format(expr.value))
-        print('  Got a symbol {}'.format(environment[expr.value]))
-        return environment[expr.value]
+        if not variable:
+            if expr.value not in environment:
+                print('OOPS')
+                print(expr.value)
+                print(environment)
+                print(Symbol)
+                fail("Couldn't find symbol {}".format(expr.value))
+            print('  Got a symbol {}'.format(environment[expr.value]))
+            return environment[expr.value]
+        else:
+            print('we are getting a variable operator for {}'.format(expr))
+            return variable_environment[expr.value]
+
     elif isinstance(expr, list):
 
         '''
@@ -245,10 +270,14 @@ def eval(expr, environment):
                         oper_index = find_first_index(operators[ind], expr_strs)
                         # print('.    oper_index {}'.format(oper_index))
                         # print('.    expr[oper_index] {}'.format(expr[oper_index]))
-                        actual_operator = eval(expr[oper_index], environment)
                         # print('.    actual_operator {}'.format(actual_operator))
                         first_arg = eval(expr[oper_index - 1], environment) if type(expr[oper_index - 1]) in [list, Symbol] else expr[oper_index - 1]
                         second_arg = eval(expr[oper_index + 1], environment) if type(expr[oper_index + 1]) in [list, Symbol] else expr[oper_index + 1]
+
+                        actual_operator = eval(
+                            expr[oper_index],
+                            environment,
+                            variables_in_args([first_arg, second_arg]))
                         print('    Running {} on {} and {}'.format(expr[oper_index], first_arg, second_arg))
 
                         new_field = apply(
@@ -296,8 +325,11 @@ def eval(expr, environment):
 
             else:
                 print('we are in the list else {}'.format(expr))
-                fn = eval(expr[0], environment)
                 args = [eval(arg, environment) for arg in expr[1:]]
+                fn = eval(
+                    expr[0],
+                    environment,
+                    variables_in_args(args))
                 print('now applying my list else ==> {} to {}'.format(fn, args))
                 return apply(fn, args, environment)
 
