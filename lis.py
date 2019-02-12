@@ -1,7 +1,11 @@
 import re
 import sys
 import operator
+import math
+import scipy.stats as stats
 import pprint as pretty_print
+from pampy import match, _
+
 pprint = lambda obj: pretty_print.PrettyPrinter(indent=4).pprint(obj)
 infix_operators = ['*', '+', '/', '-', '==', '>', '<']
 comp_operators = ['==', '>', '<']
@@ -30,7 +34,7 @@ class InterpreterObject(object):
         self.value = value
 
     def __repr__(self):
-        return self.value
+        return str(self.value)
 
 class Symbol(InterpreterObject):
     pass
@@ -47,26 +51,117 @@ class Lambda(InterpreterObject):
         return "(lambda (%s) (%s)" % (self.arguments, self.code)
 
 class Variable(InterpreterObject):
-    def __init__(self, series):
-        self.denominator = series.count()
-        self.numerator = series.apply(lambda x: x).count()
-        self.proportion = self.numerator / self.denominator
-        self.variance = (self.proportion * (1 - self.proportion)) / self.denominator
-        self.mean = series.count() * series.mean()
-        self.good = True
+    pass
 
-    def multiply_constant(self, const):
-        self.mean = self.mean * const
-        self.variance = self.mean * (const**2)
-        return self
+
+class Probability(Variable):
+    def __init__(self, probability):
+        self.probability = probability
 
     def __repr__(self):
-        return "Variable: {}".format(self.__dict__.__str__())
+        return "[PROBABILITY: {}]".format(self.probability)
+
+    def multiply_constant(self, value):
+        return self.probability * value
+
+    def equals(self, y):
+        bool_value = 1 if self.probability == y.probability else 0
+        return bool_value
+
+class Distribution(Variable):
+    """ This will be for something like NPS """
+    def __init__(self, mean, variance):
+        self.mean = mean
+        self.variance = variance
+
+    def __repr__(self):
+        return "[DISTRIBUTION: mu={}, sigma^2={}]".format(self.mean, self.variance)
+
+    def less_than(self, value):
+        std_dev = math.sqrt(self.variance)
+        z_value = (value - self.mean) / std_dev
+        return Probability(stats.norm.cdf(z_value))
+
+    def greater_than(self, value):
+        std_dev = math.sqrt(self.variance)
+        z_value = (self.mean - value) / std_dev
+        return Probability(stats.norm.cdf(z_value))
+
+    def multiply_constant(self, value):
+        new_mean = self.mean * value
+        new_var = self.variance * (value**2)
+        return Distribution(new_mean, new_var)
+
+    def subtract_proportion(self, prop):
+        new_mean = self.mean - prop.mean
+        new_var = self.variance + prop.variance + (2 * self.mean * prop.mean)
+        return Distribution(new_mean, new_var)
+
+    def add_proportion(self, prop):
+        new_mean = self.mean + prop.mean
+        new_var = self.variance + prop.variance - (2 * self.mean * prop.mean)
+        return Distribution(new_mean, new_var)
+
+    def equals(self, y):
+        bool_value = 1 if self.mean == y.mean and self.variance == y.variance else 0
+        return bool_value
 
 
-def add_series(name, series, env):
-    env[name] = Variable(series)
-    return env
+class Proportion(Distribution):
+    def __init__(self, **kwargs):
+        if 'series' in kwargs.keys():
+            series = kwargs['series']
+            self.denominator = series.count()
+            self.numerator = series[series != 0].count()
+            self.p = self.numerator / self.denominator
+            self.mean = series.mean()
+            self.variance = series.var()
+        else:
+            self.numerator = kwargs['numerator']
+            self.denominator = kwargs['denominator']
+            self.mean = self.numerator
+            self.p = self.numerator / self.denominator
+            self.variance = self.p * (1 - self.p)
+
+
+    def __repr__(self):
+        return "[PROPORTION: {} / {}]".format(self.numerator, self.denominator)
+
+    def greater_than(self, prop):
+        sub_prop = self.subtract_proportion(prop)
+        return sub_prop.greater_than(0)
+
+    def less_than(self, prop):
+        sub_prop = self.subtract_proportion(prop)
+        return sub_prop.less_than(0)
+
+
+class Value(Variable):
+    def __init__(self, value):
+        self.value = value
+
+    def __repr__(self):
+        return "VALUE: {}".format(self.value)
+
+    def equals(self, y):
+        bool_value = 1 if self.value == y.value else 0
+        return bool_value
+
+class Fail(Variable):
+    def __repr__(self):
+        return "FAILURE!!"
+
+class VariableFactory:
+    def __call__(self, **kwargs):
+        return match(kwargs,
+            {'series': _ }, lambda s: Proportion(**{'series': s}),
+            {'numerator': _, 'denominator': _}, lambda n, d: Proportion(n, d),
+            {'value': _}, lambda x: Value(x),
+            {'mean': _, 'variance': _}, lambda m, v: Distribution(m, v),
+            _, lambda x: Fail(None)
+        )
+
+variable_factory = VariableFactory()
 
 def tokenize(s):
     ret = []
@@ -192,21 +287,65 @@ def do_parse(tokens):
 # First, let’s define how to evaluate numbers, strings and Symbols.
 
 def variable_multiplication(x, y):
-    if isinstance(x, int):
-        return y.multiply_constant(x)
-    elif isinstance(y, int):
-        return x.multiply_constant(y)
+    return match([x, y],
+        [Distribution, int], lambda x, y: x.multiply_constant(y),
+        [Distribution, float], lambda x, y: x.multiply_constant(y),
+        [int, Distribution], lambda x, y: y.multiply_constant(x),
+        [float, Distribution], lambda x, y: y.multiply_constant(x),
 
+        [Probability, int], lambda x, y: x.multiply_constant(y),
+        [Probability, float], lambda x, y: x.multiply_constant(y),
+        [int, Probability], lambda x, y: y.multiply_constant(x),
+        [float, Probability], lambda x, y: y.multiply_constant(x),
+        [_, _], lambda x, y: variable_factory(failure=1)
+    )
+
+def variable_minus(x, y):
+    return match([x, y],
+        [Distribution, Distribution], lambda x, y: x.subtract_proportion(y),
+        [_, _], lambda x, y: variable_factory(failure=1)
+    )
+
+def variable_plus(x, y):
+    return match([x, y],
+        [Proportion, Proportion], lambda x, y: x.add_proportion(y),
+        [_, _], lambda x, y: variable_factory(failure=1)
+    )
+
+def variable_greater_than(x, y):
+    return match([x, y],
+        [Proportion, Proportion], lambda x, y: x.greater_than(y),
+        [_, _], lambda x, y: variable_factory(failure=1)
+    )
+
+def variable_less_than(x, y):
+    return match([x, y],
+        [Proportion, Proportion], lambda x, y: x.less_than(y),
+        [_, _], lambda x, y: variable_factory(failure=1)
+    )
+
+def variable_equals(x, y):
+    return match([x, y],
+        [Distribution, Distribution], lambda x, y: x.equals(y),
+        [Probability, Probability], lambda x, y: x.equals(y),
+        [Value, Value], lambda x, y: x.equals(y),
+        [_, _], lambda x, y: variable_factory(failure=1)
+    )
 
 variable_environment = {
-    '*': variable_multiplication
+    '-': variable_minus,
+    '+': variable_plus,
+    '*': variable_multiplication,
+    '>': variable_greater_than,
+    '<': variable_less_than,
+    '==': variable_equals,
 }
 
 def variables_in_args(args):
     return any([isinstance(x, Variable) for x in args])
 
 def eval(expr, environment, variable=False):
-    print('IN EVAL: GOT EXPR {}'.format(expr))
+    print('λ {}'.format(expr))
     # print('OF TYPE: {}'.format(type(expr)))
     if isinstance(expr, int):
         return expr
@@ -226,10 +365,10 @@ def eval(expr, environment, variable=False):
                 print(environment)
                 print(Symbol)
                 fail("Couldn't find symbol {}".format(expr.value))
-            print('  Got a symbol {}'.format(environment[expr.value]))
+            print('  {}'.format(environment[expr.value]))
             return environment[expr.value]
         else:
-            print('we are getting a variable operator for {}'.format(expr))
+            print('📊 Stat Variable Operator {}'.format(expr))
             return variable_environment[expr.value]
 
     elif isinstance(expr, list):
@@ -240,11 +379,9 @@ def eval(expr, environment, variable=False):
             For example if we defined if as a function, this expression (if (= 3 2) (print '3 = 2') (print '3 = 3'))
             would print both 3 = 2 and 3 = 3, because the eval function evaluates its arguments in order.
         '''
-
-        # print('IT IS A LIST!!!!')
         print('LIST LENGTH: {}'.format(len(expr)))
         if len(expr) == 0:
-            print('Returning NONE')
+            print('😢')
             return None
 
         # At least 3 elements
@@ -255,22 +392,17 @@ def eval(expr, environment, variable=False):
             len(expr) % 2 == 1,
             set([x.__str__() for x in expr[1::2]]).issubset(set(infix_operators))
         ]):
-            print('We got a case of the infixes!')
             # First, do the mult operators, from left to right
             # Next, do the add_operators, from left to right
             # Finally, do the comparator operators, I guess, left to right
             operators = [x.__str__() for x in expr[1::2]]
             for oper_list in operator_hierarchy:
-                # print('oper_list {}'.format(oper_list))
                 for ind in range(len(operators)):
                     if operators[ind] in oper_list:
                         expr_strs = [x.__str__() for x in expr]
-                        # print('Found {} first'.format(operators[ind]))
+
                         # Do this one
                         oper_index = find_first_index(operators[ind], expr_strs)
-                        # print('.    oper_index {}'.format(oper_index))
-                        # print('.    expr[oper_index] {}'.format(expr[oper_index]))
-                        # print('.    actual_operator {}'.format(actual_operator))
                         first_arg = eval(expr[oper_index - 1], environment) if type(expr[oper_index - 1]) in [list, Symbol] else expr[oper_index - 1]
                         second_arg = eval(expr[oper_index + 1], environment) if type(expr[oper_index + 1]) in [list, Symbol] else expr[oper_index + 1]
 
@@ -278,13 +410,13 @@ def eval(expr, environment, variable=False):
                             expr[oper_index],
                             environment,
                             variables_in_args([first_arg, second_arg]))
-                        print('    Running {} on {} and {}'.format(expr[oper_index], first_arg, second_arg))
+                        print('   👷Running ({}) on {} and {}'.format(expr[oper_index], first_arg, second_arg))
 
                         new_field = apply(
                             actual_operator,
                             [first_arg, second_arg],
                             environment)
-                        # print('Got back {}'.format(new_field))
+
                         expr[(oper_index - 1): (oper_index + 2 )] = [new_field]
                         print('         Now Expression is', expr)
 
@@ -323,13 +455,12 @@ def eval(expr, environment, variable=False):
                 return eval(expr[-1], environment)
 
             else:
-                print('we are in the list else {}'.format(expr))
                 args = [eval(arg, environment) for arg in expr[1:]]
                 fn = eval(
                     expr[0],
                     environment,
                     variables_in_args(args))
-                print('now applying my list else ==> {} to {}'.format(fn, args))
+                print('🏃 Applying List Else ==> {} to {}'.format(fn, args))
                 return apply(fn, args, environment)
 
 #Apply is pretty simple too. It checks if a function is an interpreter built-in or not.
