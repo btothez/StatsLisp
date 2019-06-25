@@ -18,6 +18,11 @@ operator_hierarchy = [
     ['==', '>', '<']
 ]
 
+def add_ns(a, b):
+    if a is None or b is None:
+        return None
+    return a + b
+
 def find_first_index(el, lst, ind=0):
     if len(lst) == 0:
         return False
@@ -54,12 +59,25 @@ class Variable(InterpreterObject):
     pass
 
 
-class Probability(Variable):
-    def __init__(self, probability):
-        self.probability = probability
+class P_Value(Variable):
+    def __init__(self, p_value):
+        self.p_value = p_value
 
     def __repr__(self):
-        return "[PROBABILITY: {}]".format(self.probability)
+        return "[P-Value: {}]".format(self.p_value)
+
+class Probability(Variable):
+    def __init__(self, probability, p_value=False):
+        self.probability = probability
+        self.p_value = p_value
+
+    def __repr__(self):
+        if not self.p_value:
+            return "[PROBABILITY: {}]".format(self.probability)
+        elif self.probability <= 0.05:
+            return "P-Value {} :: 🙅 - Reject the Null".format(self.probability)
+        else:
+            return "P-Value {} :: 👍 - Null Hypothesis Confirmed".format(self.probability)
 
     def multiply_constant(self, value):
         return self.probability * value
@@ -70,12 +88,13 @@ class Probability(Variable):
 
 class Distribution(Variable):
     """ This will be for something like NPS """
-    def __init__(self, mean, variance):
+    def __init__(self, mean, variance, n=None):
         self.mean = mean
         self.variance = variance
+        self.n = n
 
     def __repr__(self):
-        return "[DISTRIBUTION: mu={}, sigma^2={}]".format(self.mean, self.variance)
+        return "[DISTRIBUTION: mean={}, var={}]".format(self.mean, self.variance)
 
     def less_than(self, value):
         std_dev = math.sqrt(self.variance)
@@ -90,21 +109,27 @@ class Distribution(Variable):
     def multiply_constant(self, value):
         new_mean = self.mean * value
         new_var = self.variance * (value**2)
-        return Distribution(new_mean, new_var)
+        return Distribution(new_mean, new_var, n=self.n)
 
     def subtract_proportion(self, prop):
         new_mean = self.mean - prop.mean
         new_var = self.variance + prop.variance + (2 * self.mean * prop.mean)
-        return Distribution(new_mean, new_var)
+        new_n = add_ns(self.n, prop.n)
+        return Distribution(new_mean, new_var, n=new_n)
 
     def add_proportion(self, prop):
         new_mean = self.mean + prop.mean
         new_var = self.variance + prop.variance - (2 * self.mean * prop.mean)
-        return Distribution(new_mean, new_var)
+        new_n = add_ns(self.n, prop.n)
+        return Distribution(new_mean, new_var, n=new_n)
 
     def equals(self, y):
         bool_value = 1 if self.mean == y.mean and self.variance == y.variance else 0
         return bool_value
+
+    def test(self, y):
+        z_score = (self.mean - y.mean) / math.sqrt((self.variance / self.n) + (y.variance / y.n))
+        return Probability(stats.norm.cdf(z_score), p_value=True)
 
 
 class Proportion(Distribution):
@@ -112,6 +137,7 @@ class Proportion(Distribution):
         if 'series' in kwargs.keys():
             series = kwargs['series']
             self.denominator = series.count()
+            self.n = series.count()
             self.numerator = series[series != 0].count()
             self.p = self.numerator / self.denominator
             self.mean = series.mean()
@@ -119,6 +145,7 @@ class Proportion(Distribution):
         else:
             self.numerator = kwargs['numerator']
             self.denominator = kwargs['denominator']
+            self.n = kwargs['denominator']
             self.mean = self.numerator
             self.p = self.numerator / self.denominator
             self.variance = self.p * (1 - self.p)
@@ -308,7 +335,7 @@ def variable_minus(x, y):
 
 def variable_plus(x, y):
     return match([x, y],
-        [Proportion, Proportion], lambda x, y: x.add_proportion(y),
+        [Distribution, Distribution], lambda x, y: x.add_proportion(y),
         [_, _], lambda x, y: variable_factory(failure=1)
     )
 
@@ -332,6 +359,12 @@ def variable_equals(x, y):
         [_, _], lambda x, y: variable_factory(failure=1)
     )
 
+def variable_test(x, y):
+    return match([x, y],
+        [Distribution, Distribution], lambda x, y: x.test(y),
+        [_, _], lambda x, y: variable_factory(failure=1)
+    )
+
 variable_environment = {
     '-': variable_minus,
     '+': variable_plus,
@@ -339,6 +372,7 @@ variable_environment = {
     '>': variable_greater_than,
     '<': variable_less_than,
     '==': variable_equals,
+    'test': variable_test
 }
 
 def variables_in_args(args):
